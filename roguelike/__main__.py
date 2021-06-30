@@ -1,0 +1,3 @@
+import roguelike
+
+roguelike.main()
