@@ -11,4 +11,4 @@ Follow these steps to run this project:
 5. Launch the package: `python3 -m roguelike`
 
 
-This project uses the [monogram][https://datagoblin.itch.io/monogram] font
+This project uses the [monogram](https://datagoblin.itch.io/monogram) font
