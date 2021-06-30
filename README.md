@@ -1,4 +1,4 @@
-###RoguelikeDev Does The Complete Roguelike Tutorial
+### RoguelikeDev Does The Complete Roguelike Tutorial
 Project created as part of the r/RoguelikeDev code-along event.
 Full details here: https://old.reddit.com/r/roguelikedev/comments/o5x585/roguelikedev_does_the_complete_roguelike_tutorial/
 
