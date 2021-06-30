@@ -1,0 +1,3 @@
+tcod
+# version requirement due to https://github.com/pyglet/pyglet/issues/409
+pyglet==1.5.17
