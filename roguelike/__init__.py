@@ -86,6 +86,27 @@ class Player:
             self.sprite.y += self.movement[1]
 
 
+# MAP > GRID > VIEW
+# map is the underlying map data
+# grid is the section of the map data currently loaded
+# view is the subset of the grid actually displayed
+
+
+class Map:
+    ...
+
+class Grid:
+    def __init__(self, window: pyglet.window.Window) -> None:
+        self.player = Player(batch=window.main_batch, x=window.width//2, y=window.height//2)
+        self.game_objects = [self.player]
+        window.push_handlers(self.player)
+        pyglet.clock.schedule_interval(self.update, UPDATE_INTERVAL)
+
+    def update(self, delta: float) -> None:
+        for obj in self.game_objects:
+            obj.update(delta)
+
+
 
 class GameWindow(pyglet.window.Window):
     def __init__(self):
@@ -100,6 +121,8 @@ class GameWindow(pyglet.window.Window):
             batch=self.main_batch
         )
 
+        self.grid = Grid(self)
+
 
     def on_draw(self) -> None:
         self.clear()
@@ -111,19 +134,17 @@ class GameWindow(pyglet.window.Window):
         LOGGER.debug("The window was resized to %dx%d", width, height)
 
 
+    def on_deactivate(self):
+        pyglet.clock.unschedule(self.grid.update)
+
+
+    def on_activate(self):
+        pyglet.clock.schedule_interval(self.grid.update, UPDATE_INTERVAL)
+
+
 
 def main() -> None:
     """"""
     LOGGER.debug("Starting main()")
     window = GameWindow()
-    player = Player(batch=window.main_batch, x=window.width//2, y=window.height//2)
-    window.push_handlers(player)
-
-    def update(delta: float) -> None:
-        for obj in game_objects:
-            obj.update(delta)
-
-
-    game_objects = [player]
-    pyglet.clock.schedule_interval(update, UPDATE_INTERVAL)
     pyglet.app.run()
