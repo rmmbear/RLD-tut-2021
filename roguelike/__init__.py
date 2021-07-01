@@ -116,6 +116,7 @@ class Cell:
     # https://github.com/python/mypy/issues/9779
     @sprite.setter # type: ignore [no-redef]
     def sprite(self, sprite: pyglet.sprite.Sprite) -> None: # pylint: disable=function-redefined
+        """Ensure proper placement and anchoring."""
         sprite.x = self.x
         sprite.y = self.y
         sprite.anchor_y = 0
@@ -125,6 +126,8 @@ class Cell:
 
 
     def add_entity(self, entity: Entity) -> None:
+        LOGGER.debug("Player on: grid(%d,%d) abs(%d,%d)",
+                     self.grid_x, self.grid_y, self.x, self.y)
         entity.sprite.x = self.x
         entity.sprite.y = self.y
         entity.occupied_cell = self
@@ -133,6 +136,25 @@ class Cell:
 
     def remove_entity(self) -> None:
         self.entity = None
+
+
+    def move_cell(self, pos_x: int, pos_y: int, scale: Optional[float] = None) -> None:
+        if scale:
+            if self.sprite:
+                self.sprite.scale = scale
+            if self.entity:
+                #breakpoint()
+                self.entity.sprite.scale = scale
+
+        self.x = pos_x
+        self.y = pos_y
+        if self.sprite:
+            self.sprite.x = pos_x
+            self.sprite.y = pos_y
+
+        if self.entity:
+            self.entity.sprite.x = pos_x
+            self.entity.sprite.y = pos_y
 
 
     def can_move_here(self, entity: Entity) -> bool:
@@ -153,26 +175,21 @@ class Grid:
         self.grid_rows = grid_rows
         self._grid = numpy.empty((grid_rows, grid_cols), dtype=Cell)
 
-        sprite_scale = window.width / (self.grid_cols * IMG_FONT_WIDTH)
-        sprite_size = IMG_FONT_WIDTH * sprite_scale
         LOGGER.debug("Initializing grid")
         for row in range(grid_rows):
             for col in range(grid_cols):
-                pos_x = sprite_size * col + 1
-                pos_y = sprite_size * row + 1
                 sprite = pyglet.sprite.Sprite(
                     IMG_FONT[6, 11], batch=window.main_batch, group=window.grp_background)
-                sprite.scale = sprite_scale
                 self._grid[row][col] = Cell(
-                    x=pos_x, y=pos_y, grid_x=col, grid_y=row, sprite=sprite, grid=self._grid)
+                    x=0, y=0, grid_x=col, grid_y=row, sprite=sprite, grid=self._grid)
 
         LOGGER.debug("Grid initialized")
 
         player_sprite = pyglet.sprite.Sprite(
             IMG_FONT[6, 0], batch=window.main_batch, group=window.grp_foreground)
-        player_sprite.scale = sprite_scale
+        player_sprite.scale = window.width / (self.grid_cols * IMG_FONT_WIDTH)
         self.player = Entity(player_sprite)
-        self._grid[grid_cols//2][grid_rows//2].add_entity(self.player)
+        self._grid[self.grid_cols//2][self.grid_rows//2].add_entity(self.player)
         pyglet.clock.schedule_interval(self.update, UPDATE_INTERVAL)
 
         self.active_entities = [self.player]
@@ -197,11 +214,19 @@ class Grid:
 
 
     def resize(self, window: pyglet.window.Window) -> None:
-        ...
+        sprite_scale = window.width / (self.grid_cols * IMG_FONT_WIDTH)
+        sprite_size = IMG_FONT_WIDTH * sprite_scale
+        LOGGER.debug("Resizing grid")
+        for row in range(self.grid_rows):
+            for col in range(self.grid_cols):
+                pos_x = sprite_size * col + 1
+                pos_y = sprite_size * row + 1
+                self._grid[row][col].move_cell(pos_x, pos_y, sprite_scale)
+
+        LOGGER.debug("Done resizing")
 
 
-
-class GameWindow(pyglet.window.Window):
+class GameWindow(pyglet.window.Window): #pylint: disable=abstract-method
     def __init__(self) -> None:
         super().__init__(800, 600, resizable=True)
         self.main_batch = pyglet.graphics.Batch()
@@ -234,7 +259,7 @@ class GameWindow(pyglet.window.Window):
 
 
     def check_fps(self, delta: int) -> None:
-        self.fps_label.text = f"{pyglet.clock.get_fps():2.3}"
+        self.fps_label.text = f"{float(pyglet.clock.get_fps()):2.3}"
 
 
     def on_draw(self) -> None:
@@ -243,8 +268,26 @@ class GameWindow(pyglet.window.Window):
 
 
     def on_resize(self, width: int, height: int) -> None:
+        optimal_height = (3 * self.width) // 4
+        if height != optimal_height:
+            pyglet.clock.schedule_once(self.correct_aspect, .4)
+            #FIXME: resizing stops when the mouse stops moving,
+            # and not when the user releases the resizing handle
+            # as long as the handle is held, the window cannot be
+            # programmatically resized
+            return
+            # on_resize will be called again as result of correct_apsect()
+
         super().on_resize(width, height)
         LOGGER.debug("The window was resized to %dx%d", width, height)
+        self.grid.resize(self)
+
+
+    def correct_aspect(self, _):
+        optimal_height = (3 * self.width) // 4
+        if self.height != optimal_height:
+            LOGGER.debug("correcting height")
+            self.set_size(self.width, optimal_height)
 
 
     def on_deactivate(self) -> None:
@@ -257,7 +300,6 @@ class GameWindow(pyglet.window.Window):
 
 
 def main() -> None:
-    """"""
     LOGGER.debug("Starting main()")
     window = GameWindow()
     pyglet.app.run()
