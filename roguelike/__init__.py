@@ -189,7 +189,7 @@ class Grid:
             IMG_FONT[6, 0], batch=window.main_batch, group=window.grp_foreground)
         player_sprite.scale = window.width / (self.grid_cols * IMG_FONT_WIDTH)
         self.player = Entity(player_sprite)
-        self._grid[self.grid_cols//2][self.grid_rows//2].add_entity(self.player)
+        self._grid[self.grid_rows//2][self.grid_cols//2].add_entity(self.player)
         pyglet.clock.schedule_interval(self.update, UPDATE_INTERVAL)
 
         self.active_entities = [self.player]
@@ -228,7 +228,7 @@ class Grid:
 
 class GameWindow(pyglet.window.Window): #pylint: disable=abstract-method
     def __init__(self) -> None:
-        super().__init__(800, 600, resizable=True)
+        super().__init__(800, 600, caption="roguelike", resizable=True)
         self.main_batch = pyglet.graphics.Batch()
         self.grp_background = pyglet.graphics.OrderedGroup(0)
         self.grp_foreground = pyglet.graphics.OrderedGroup(1)
