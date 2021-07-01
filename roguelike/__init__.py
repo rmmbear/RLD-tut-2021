@@ -2,7 +2,7 @@ import os
 import enum
 import logging
 import dataclasses as dc
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import numpy
 import pyglet
@@ -24,7 +24,7 @@ pyglet.resource.path = [DIR_RES]
 pyglet.resource.reindex()
 
 IMG_FONT = pyglet.image.ImageGrid(pyglet.image.load("res/dejavu10x10_gs_tc.png"), 8, 32)
-UPDATE_INTERVAL = 1/10
+UPDATE_INTERVAL = 1/60
 
 #TODO: make the grid/sprite size dynamic/adjustable
 #TODO: make the grid scale automatically when resizing the window
@@ -69,12 +69,12 @@ class Entity:
     def __init__(self, sprite: pyglet.sprite.Sprite):
         self.sprite = sprite
         self.occupied_cell: Optional[Cell] = None
-        self.planned_move: Optional[Tuple[Directions, int]] = ()
+        self.planned_move: Union[Tuple[Directions, int], Tuple] = ()
         #indices: 0 = Directions.DIRECTION, 1 = key symbol
 
 
-    def update(self):
-        if self.planned_move:
+    def update(self) -> None:
+        if self.planned_move and self.occupied_cell:
             x = self.occupied_cell.grid_x + self.planned_move[0].value[0]
             y = self.occupied_cell.grid_y + self.planned_move[0].value[1]
 
@@ -106,14 +106,14 @@ class Cell:
     entity: Optional[Entity] = None
     sprite: Optional[pyglet.sprite.Sprite] = None
 
-
-    @property
-    def sprite(self):
+    # https://github.com/python/mypy/issues/9779
+    @property # type: ignore [no-redef]
+    def sprite(self) -> pyglet.sprite.Sprite:
         return self._sprite
 
-
-    @sprite.setter
-    def sprite(self, sprite: pyglet.sprite.Sprite):
+    # https://github.com/python/mypy/issues/9779
+    @property.setter # type: ignore [no-redef]
+    def sprite(self, sprite: pyglet.sprite.Sprite) -> None:
         sprite.x = self.x
         sprite.y = self.y
         sprite.anchor_y = 0
@@ -190,9 +190,12 @@ class Grid:
             entity.update()
 
 
+    def resize(self, window: pyglet.window.Window) -> None:
+        ...
+
 
 class GameWindow(pyglet.window.Window):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(800, 600, resizable=True)
         self.main_batch = pyglet.graphics.Batch()
         self.grp_background = pyglet.graphics.OrderedGroup(0)
@@ -237,11 +240,11 @@ class GameWindow(pyglet.window.Window):
         LOGGER.debug("The window was resized to %dx%d", width, height)
 
 
-    def on_deactivate(self):
+    def on_deactivate(self) -> None:
         pyglet.clock.unschedule(self.grid.update)
 
 
-    def on_activate(self):
+    def on_activate(self) -> None:
         pyglet.clock.schedule_interval(self.grid.update, UPDATE_INTERVAL)
 
 
