@@ -24,9 +24,8 @@ pyglet.resource.path = [DIR_RES]
 pyglet.resource.reindex()
 
 IMG_FONT = pyglet.image.ImageGrid(pyglet.image.load("res/dejavu10x10_gs_tc.png"), 8, 32)
-UPDATE_INTERVAL = 1/120 # 120HZ
+UPDATE_INTERVAL = 1/10
 
-#TODO: constrain movement to grid
 #TODO: make the grid/sprite size dynamic/adjustable
 #TODO: make the grid scale automatically when resizing the window
 #TODO: make sprite color adjustable
@@ -60,8 +59,6 @@ KEY_TO_DIR = {
 }
 
 
-
-
 # MAP > GRID > VIEW
 # map is the underlying map data
 # grid is the section of the map data currently loaded
@@ -72,18 +69,30 @@ class Entity:
     def __init__(self, sprite: pyglet.sprite.Sprite):
         self.sprite = sprite
         self.occupied_cell: Optional[Cell] = None
-        self.planned_move: Optional[Tuple[Cell, int]] = ()
-        #indices: 0 = Cell, 1 = key symbol
+        self.planned_move: Optional[Tuple[Directions, int]] = ()
+        #indices: 0 = Directions.DIRECTION, 1 = key symbol
 
 
     def update(self):
         if self.planned_move:
-            if self.planned_move[0].can_move_here(self):
-                self.occupied_cell.remove_entity()
-                self.planned_move[0].add_entity(self)
-                self.occupied_cell = self.planned_move[0]
+            x = self.occupied_cell.grid_x + self.planned_move[0].value[0]
+            y = self.occupied_cell.grid_y + self.planned_move[0].value[1]
+
+
+            max_y, max_x = self.occupied_cell._grid.shape
+            if not 0 <= x < max_x or not 0 <= y < max_y:
+                LOGGER.debug("edge of grid")
+                self.planned_move = ()
             else:
-                self.planned_move = None
+                target_cell = self.occupied_cell._grid[y,x]
+
+                if target_cell.can_move_here(self):
+                    self.occupied_cell.remove_entity()
+                    target_cell.add_entity(self)
+                    self.occupied_cell = target_cell
+                else:
+                    LOGGER.debug("cannot move here")
+                    self.planned_move = ()
 
 
 
@@ -96,7 +105,6 @@ class Cell:
     _grid: numpy.ndarray
     entity: Optional[Entity] = None
     sprite: Optional[pyglet.sprite.Sprite] = None
-
 
 
     @property
@@ -139,18 +147,18 @@ class Map:
 
 class Grid:
     def __init__(self, grid_columns: int, grid_rows: int, window: pyglet.window.Window) -> None:
-        csize = 20
-        self._grid = numpy.empty((grid_columns, grid_rows), dtype=Cell)
+        csize = 15
+        self._grid = numpy.empty((grid_rows, grid_columns), dtype=Cell)
         LOGGER.debug("Initializing grid")
         for i in range(grid_columns * grid_rows):
             row = i//grid_columns
             column = i - (row*grid_columns)
-            x = csize * column
-            y = csize * row
+            x = csize * column + 10
+            y = csize * row + 10
             sprite = pyglet.sprite.Sprite(
                 IMG_FONT[6, 11], batch=window.main_batch, group=window.grp_background)
-            self._grid[column][row] = Cell(
-                x=x, y=y, grid_x=row, grid_y=column, sprite=sprite, _grid=self._grid)
+            self._grid[row][column] = Cell(
+                x=x, y=y, grid_x=column, grid_y=row, sprite=sprite, _grid=self._grid)
 
         self._grid.reshape(grid_columns,grid_rows)
         LOGGER.debug("Grid initialized")
@@ -165,24 +173,21 @@ class Grid:
 
 
     def on_key_press(self, symbol: int, modifiers: int) -> None:
+        LOGGER.debug("Key pressed %d", symbol)
         move = KEY_TO_DIR.get(symbol)
         if move:
-            x = self.player.occupied_cell.grid_x + move.value[0]
-            y = self.player.occupied_cell.grid_y + move.value[1]
-            cell = self._grid[y,x]
-            self.player.planned_move = (cell, symbol)
+            self.player.planned_move = (move, symbol)
 
 
     def on_key_release(self, symbol: int, modifiers: int) -> None:
+        LOGGER.debug("Key released %d", symbol)
         if self.player.planned_move and self.player.planned_move[1] == symbol:
-            self.player.planned_move = None
+            self.player.planned_move = ()
 
 
     def update(self, delta: float) -> None:
         for entity in self.active_entities:
             entity.update()
-
-
 
 
 
@@ -216,6 +221,7 @@ class GameWindow(pyglet.window.Window):
         self.grid = Grid(40, 30, self)
         self.push_handlers(self.grid)
         pyglet.clock.schedule_interval(self.check_fps, 1)
+
 
     def check_fps(self, delta: int) -> None:
         self.fps_label.text = f"{pyglet.clock.get_fps():2.3}"
