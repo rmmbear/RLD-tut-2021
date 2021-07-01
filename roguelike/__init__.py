@@ -109,7 +109,7 @@ class Cell:
         sprite.y = self.y
         sprite.anchor_y = 0
         sprite.anchor_x = 0
-        sprite.color = (2000,200,255)
+        sprite.color = (128,128,128)
         self._sprite = sprite
 
 
@@ -165,11 +165,25 @@ class GameWindow(pyglet.window.Window):
             batch=self.main_batch, group=self.grp_interface
         )
 
+        self.fps_label = pyglet.text.Label(
+            text="00.00",
+            font_name="monogram",
+            font_size=24,
+            color=(250,100,100, 255),
+            x=15, y=self.height-50,
+            anchor_x="left", anchor_y="center",
+            batch=self.main_batch, group=self.grp_interface
+        )
+
         self.grid = Grid(40, 30, self)
+        pyglet.clock.schedule_interval(self.check_fps, 1)
+
+    def check_fps(self, delta: int) -> None:
+        self.fps_label.text = f"{pyglet.clock.get_fps():2.3}"
 
 
     def on_draw(self) -> None:
-        #self.clear()
+        self.clear()
         self.main_batch.draw()
 
 
