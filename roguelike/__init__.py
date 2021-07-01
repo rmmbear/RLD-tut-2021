@@ -112,7 +112,7 @@ class Cell:
         return self._sprite
 
     # https://github.com/python/mypy/issues/9779
-    @property.setter # type: ignore [no-redef]
+    @sprite.setter # type: ignore [no-redef]
     def sprite(self, sprite: pyglet.sprite.Sprite) -> None:
         sprite.x = self.x
         sprite.y = self.y
