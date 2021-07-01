@@ -22,6 +22,7 @@ pyglet.resource.path = [DIR_RES]
 pyglet.resource.reindex()
 
 IMG_FONT = pyglet.image.ImageGrid(pyglet.image.load("res/dejavu10x10_gs_tc.png"), 8, 32)
+UPDATE_INTERVAL = 1/120 # 120HZ
 
 #TODO: constrain movement to grid
 #TODO: make the grid/sprite size dynamic/adjustable
@@ -85,32 +86,38 @@ class Player:
             self.sprite.y += self.movement[1]
 
 
+
+class GameWindow(pyglet.window.Window):
+    def __init__(self):
+        super().__init__(800, 600, resizable=True)
+        self.main_batch = pyglet.graphics.Batch()
+        self.label = pyglet.text.Label(
+            text="Hello roguelike world",
+            font_name="monogram",
+            font_size=32,
+            x=self.width//2, y=self.height-100,
+            anchor_x="center", anchor_y="center",
+            batch=self.main_batch
+        )
+
+
+    def on_draw(self) -> None:
+        self.clear()
+        self.main_batch.draw()
+
+
+    def on_resize(self, width: int, height: int) -> None:
+        super().on_resize(width, height)
+        LOGGER.debug("The window was resized to %dx%d", width, height)
+
+
+
 def main() -> None:
     """"""
     LOGGER.debug("Starting main()")
-    window = pyglet.window.Window(800, 600, resizable=True)
-    main_batch = pyglet.graphics.Batch()
-    player = Player(batch=main_batch, x=window.width//2, y=window.height//2)
+    window = GameWindow()
+    player = Player(batch=window.main_batch, x=window.width//2, y=window.height//2)
     window.push_handlers(player)
-    label = pyglet.text.Label(
-        text="Hello roguelike world",
-        font_name="monogram",
-        font_size=40,
-        x=window.width//2, y=window.height-100,
-        anchor_x="center", anchor_y="top",
-        batch=main_batch
-    )
-
-    @window.event
-    def on_draw() -> None:
-        window.clear()
-        main_batch.draw()
-
-
-    @window.event
-    def on_resize(width: int, height: int) -> None:
-        LOGGER.debug("The window was resized to %dx%d", width, height)
-
 
     def update(delta: float) -> None:
         for obj in game_objects:
@@ -118,6 +125,5 @@ def main() -> None:
 
 
     game_objects = [player]
-    # enable the update loop, firing at 120HZ
-    pyglet.clock.schedule_interval(update, 1/120)
+    pyglet.clock.schedule_interval(update, UPDATE_INTERVAL)
     pyglet.app.run()
