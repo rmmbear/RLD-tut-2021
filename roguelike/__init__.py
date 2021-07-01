@@ -24,6 +24,8 @@ pyglet.resource.path = [DIR_RES]
 pyglet.resource.reindex()
 
 IMG_FONT = pyglet.image.ImageGrid(pyglet.image.load("res/dejavu10x10_gs_tc.png"), 8, 32)
+IMG_FONT_WIDTH = 10
+IMG_FONT_HEIGHT = 10
 UPDATE_INTERVAL = 1/60
 
 #TODO: make the grid/sprite size dynamic/adjustable
@@ -150,17 +152,15 @@ class Grid:
         csize = 15
         self._grid = numpy.empty((grid_rows, grid_columns), dtype=Cell)
         LOGGER.debug("Initializing grid")
-        for i in range(grid_columns * grid_rows):
-            row = i//grid_columns
-            column = i - (row*grid_columns)
-            x = csize * column + 10
-            y = csize * row + 10
-            sprite = pyglet.sprite.Sprite(
-                IMG_FONT[6, 11], batch=window.main_batch, group=window.grp_background)
-            self._grid[row][column] = Cell(
-                x=x, y=y, grid_x=column, grid_y=row, sprite=sprite, _grid=self._grid)
+        for row in range(grid_rows):
+            for col in range(grid_columns):
+                x = csize * col + 10
+                y = csize * row + 10
+                sprite = pyglet.sprite.Sprite(
+                    IMG_FONT[6, 11], batch=window.main_batch, group=window.grp_background)
+                self._grid[row][col] = Cell(
+                    x=x, y=y, grid_x=col, grid_y=row, sprite=sprite, _grid=self._grid)
 
-        self._grid.reshape(grid_columns,grid_rows)
         LOGGER.debug("Grid initialized")
 
         player_sprite = pyglet.sprite.Sprite(
