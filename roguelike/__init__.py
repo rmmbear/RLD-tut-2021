@@ -77,16 +77,16 @@ class Entity:
 
     def update(self) -> None:
         if self.planned_move and self.occupied_cell:
-            x = self.occupied_cell.grid_x + self.planned_move[0].value[0]
-            y = self.occupied_cell.grid_y + self.planned_move[0].value[1]
+            target_x = self.occupied_cell.grid_x + self.planned_move[0].value[0]
+            target_y = self.occupied_cell.grid_y + self.planned_move[0].value[1]
 
 
-            max_y, max_x = self.occupied_cell._grid.shape
-            if not 0 <= x < max_x or not 0 <= y < max_y:
+            max_y, max_x = self.occupied_cell.grid.shape
+            if not 0 <= target_x < max_x or not 0 <= target_y < max_y:
                 LOGGER.debug("edge of grid")
                 self.planned_move = ()
             else:
-                target_cell = self.occupied_cell._grid[y,x]
+                target_cell = self.occupied_cell.grid[target_y, target_x]
 
                 if target_cell.can_move_here(self):
                     self.occupied_cell.remove_entity()
@@ -104,18 +104,18 @@ class Cell:
     y: int
     grid_x: int
     grid_y: int
-    _grid: numpy.ndarray
+    grid: numpy.ndarray
     entity: Optional[Entity] = None
     sprite: Optional[pyglet.sprite.Sprite] = None
 
     # https://github.com/python/mypy/issues/9779
     @property # type: ignore [no-redef]
-    def sprite(self) -> pyglet.sprite.Sprite:
+    def sprite(self) -> pyglet.sprite.Sprite: # pylint: disable=function-redefined
         return self._sprite
 
     # https://github.com/python/mypy/issues/9779
     @sprite.setter # type: ignore [no-redef]
-    def sprite(self, sprite: pyglet.sprite.Sprite) -> None:
+    def sprite(self, sprite: pyglet.sprite.Sprite) -> None: # pylint: disable=function-redefined
         sprite.x = self.x
         sprite.y = self.y
         sprite.anchor_y = 0
@@ -148,25 +148,31 @@ class Map:
 
 
 class Grid:
-    def __init__(self, grid_columns: int, grid_rows: int, window: pyglet.window.Window) -> None:
-        csize = 15
-        self._grid = numpy.empty((grid_rows, grid_columns), dtype=Cell)
+    def __init__(self, grid_cols: int, grid_rows: int, window: pyglet.window.Window) -> None:
+        self.grid_cols = grid_cols
+        self.grid_rows = grid_rows
+        self._grid = numpy.empty((grid_rows, grid_cols), dtype=Cell)
+
+        sprite_scale = window.width / (self.grid_cols * IMG_FONT_WIDTH)
+        sprite_size = IMG_FONT_WIDTH * sprite_scale
         LOGGER.debug("Initializing grid")
         for row in range(grid_rows):
-            for col in range(grid_columns):
-                x = csize * col + 10
-                y = csize * row + 10
+            for col in range(grid_cols):
+                pos_x = sprite_size * col + 1
+                pos_y = sprite_size * row + 1
                 sprite = pyglet.sprite.Sprite(
                     IMG_FONT[6, 11], batch=window.main_batch, group=window.grp_background)
+                sprite.scale = sprite_scale
                 self._grid[row][col] = Cell(
-                    x=x, y=y, grid_x=col, grid_y=row, sprite=sprite, _grid=self._grid)
+                    x=pos_x, y=pos_y, grid_x=col, grid_y=row, sprite=sprite, grid=self._grid)
 
         LOGGER.debug("Grid initialized")
 
         player_sprite = pyglet.sprite.Sprite(
             IMG_FONT[6, 0], batch=window.main_batch, group=window.grp_foreground)
+        player_sprite.scale = sprite_scale
         self.player = Entity(player_sprite)
-        self._grid[grid_columns//2][grid_rows//2].add_entity(self.player)
+        self._grid[grid_cols//2][grid_rows//2].add_entity(self.player)
         pyglet.clock.schedule_interval(self.update, UPDATE_INTERVAL)
 
         self.active_entities = [self.player]
@@ -192,6 +198,7 @@ class Grid:
 
     def resize(self, window: pyglet.window.Window) -> None:
         ...
+
 
 
 class GameWindow(pyglet.window.Window):
