@@ -1,8 +1,10 @@
 import os
 import enum
+import time
 import logging
 import dataclasses as dc
-from typing import Optional, Tuple, Union
+from math import ceil
+from typing import Any, List, Optional, Tuple, Union
 
 import numpy
 import pyglet
@@ -23,15 +25,22 @@ pyglet.font.add_directory(DIR_RES)
 pyglet.resource.path = [DIR_RES]
 pyglet.resource.reindex()
 
+IMG_FONT_SCALE = 2
 IMG_FONT = pyglet.image.ImageGrid(pyglet.image.load("res/dejavu10x10_gs_tc.png"), 8, 32)
 IMG_FONT_WIDTH = 10
 IMG_FONT_HEIGHT = 10
 UPDATE_INTERVAL = 1/60
 
-#TODO: make the grid/sprite size dynamic/adjustable
-#TODO: make the grid scale automatically when resizing the window
-#TODO: make sprite color adjustable
+IMG_WALL = IMG_FONT[5, 10]
+IMG_PLAYER = IMG_FONT[6, 0]
 
+#TODO: Delay creation of tile sprites
+#TODO: use a sprite pool, assign sprites to tiles as needed
+#TODO: investigate sprite scaling cost
+#FIXME: fix coordinate issue resulting from indexing discrepency between pyglet and numpy
+#   numpy  [0,0] = top left
+#   pyglet [0,0] = bottom left
+#
 
 @enum.unique
 class Directions(enum.Enum):
@@ -61,100 +70,102 @@ KEY_TO_DIR = {
 }
 
 
-# MAP > GRID > VIEW
-# map is the underlying map data
-# grid is the section of the map data currently loaded
-# view is the subset of the grid actually displayed
-
-
 class Entity:
-    def __init__(self, sprite: pyglet.sprite.Sprite):
+    def __init__(self, name: str, sprite: pyglet.sprite.Sprite):
+        self.name = name
         self.sprite = sprite
-        self.occupied_cell: Optional[Cell] = None
+        self.occupied_cell: Optional[Tile] = None
         self.planned_move: Union[Tuple[Directions, int], Tuple] = ()
         #indices: 0 = Directions.DIRECTION, 1 = key symbol
 
 
-    def update(self) -> None:
+    def update(self) -> Optional[Directions]:
         if self.planned_move and self.occupied_cell:
-            target_x = self.occupied_cell.grid_x + self.planned_move[0].value[0]
-            target_y = self.occupied_cell.grid_y + self.planned_move[0].value[1]
-
-
-            max_y, max_x = self.occupied_cell.grid.shape
-            if not 0 <= target_x < max_x or not 0 <= target_y < max_y:
-                LOGGER.debug("edge of grid")
+            direction = self.planned_move[0]
+            moved = self.occupied_cell.move_entity(direction)
+            if not moved:
                 self.planned_move = ()
             else:
-                target_cell = self.occupied_cell.grid[target_y, target_x]
+                return direction
 
-                if target_cell.can_move_here(self):
-                    self.occupied_cell.remove_entity()
-                    target_cell.add_entity(self)
-                    self.occupied_cell = target_cell
-                else:
-                    LOGGER.debug("cannot move here")
-                    self.planned_move = ()
+        return None
 
 
 
-@dc.dataclass
-class Cell:
-    x: int
-    y: int
+@dc.dataclass(init=True, eq=False)
+class Tile:
     grid_x: int
     grid_y: int
-    grid: numpy.ndarray
-    entity: Optional[Entity] = None
+    map_grid: numpy.ndarray
     sprite: Optional[pyglet.sprite.Sprite] = None
+    entity: Optional[Entity] = None
+    screen_x: Optional[int] = None
+    screen_y: Optional[int] = None
+
+
+    def __repr__(self) -> str:
+        return f"<Tile [{self.grid_x}, {self.grid_y}] at xy: ({self.screen_x},{self.screen_y})>"
+
 
     # https://github.com/python/mypy/issues/9779
     @property # type: ignore [no-redef]
     def sprite(self) -> pyglet.sprite.Sprite: # pylint: disable=function-redefined
+        if not hasattr(self, "_sprite"):
+            self._sprite = None
         return self._sprite
 
-    # https://github.com/python/mypy/issues/9779
-    @sprite.setter # type: ignore [no-redef]
-    def sprite(self, sprite: pyglet.sprite.Sprite) -> None: # pylint: disable=function-redefined
+
+    @sprite.setter
+    def sprite(self, sprite: pyglet.sprite.Sprite) -> None:
         """Ensure proper placement and anchoring."""
-        sprite.x = self.x
-        sprite.y = self.y
+        if self.screen_x and self.screen_y:
+            sprite.x = self.screen_x
+            sprite.y = self.screen_y
+
         sprite.anchor_y = 0
         sprite.anchor_x = 0
-        sprite.color = (128,128,128)
+        sprite.color = (
+            int(self.grid_x / self.map_grid.shape[1] * 255),
+            int(self.grid_y / self.map_grid.shape[0] * 255),
+            200,
+
+        )
         self._sprite = sprite
 
 
     def add_entity(self, entity: Entity) -> None:
-        LOGGER.debug("Player on: grid(%d,%d) abs(%d,%d)",
-                     self.grid_x, self.grid_y, self.x, self.y)
-        entity.sprite.x = self.x
-        entity.sprite.y = self.y
+        LOGGER.debug("Adding entity on: grid(%s,%s) abs(%s,%s)",
+                     self.grid_x, self.grid_y, self.screen_x, self.screen_y)
+
+        if entity.sprite and (self.screen_x and self.screen_y):
+            entity.sprite.x = self.screen_x
+            entity.sprite.y = self.screen_y
+
         entity.occupied_cell = self
         self.entity = entity
 
 
-    def remove_entity(self) -> None:
-        self.entity = None
+    def move_entity(self, direction: Directions) -> bool:
+        assert self.entity, "This tile has no entity on it!"
+        assert self.entity.planned_move[0] == direction
 
+        target_grid_x = self.grid_x + direction.value[0]
+        target_grid_y = self.grid_y + direction.value[1]
 
-    def move_cell(self, pos_x: int, pos_y: int, scale: Optional[float] = None) -> None:
-        if scale:
-            if self.sprite:
-                self.sprite.scale = scale
-            if self.entity:
-                #breakpoint()
-                self.entity.sprite.scale = scale
+        max_y, max_x = self.map_grid.shape
+        if not 0 <= target_grid_x < max_x or not 0 <= target_grid_y < max_y:
+            LOGGER.debug("%s at edge of grid", self.entity.name)
+            return False
 
-        self.x = pos_x
-        self.y = pos_y
-        if self.sprite:
-            self.sprite.x = pos_x
-            self.sprite.y = pos_y
+        target_tile = self.map_grid[target_grid_y, target_grid_x]
+        if target_tile.can_move_here(self.entity):
+            target_tile.add_entity(self.entity)
+            self.entity.occupied_cell = target_tile
+            self.entity = None
+            return True
 
-        if self.entity:
-            self.entity.sprite.x = pos_x
-            self.entity.sprite.y = pos_y
+        LOGGER.debug("%s cannot move to %s", self.entity.name, self.__repr__())
+        return False
 
 
     def can_move_here(self, entity: Entity) -> bool:
@@ -164,35 +175,67 @@ class Cell:
         return True
 
 
+    def move_tile(self, pos_x: int, pos_y: int, window: pyglet.window.Window,
+                  scale: Optional[float] = None) -> None:
+        self.screen_x = pos_x
+        self.screen_y = pos_y
+
+        if scale:
+            if self.sprite:
+                self.sprite.scale = scale
+            if self.entity:
+                self.entity.sprite.scale = scale
+
+        if self.sprite:
+            self.sprite.x = pos_x
+            self.sprite.y = pos_y
+
+        if self.entity:
+            self.entity.sprite.x = pos_x
+            self.entity.sprite.y = pos_y
+
+
+
 class Map:
-    ...
+    def __init__(self, size: Tuple[int, int], window: pyglet.window.Window) -> None:
+        self.window = window
+        self.sprite_scale = IMG_FONT_SCALE
+        self.tile_width = IMG_FONT_WIDTH * IMG_FONT_SCALE
+        self.tile_height = IMG_FONT_HEIGHT * IMG_FONT_SCALE
 
+        self.level_grid_cols, self.level_grid_rows = size
+        self.level_grid = numpy.empty((self.level_grid_rows, self.level_grid_cols), dtype=Tile)
 
-
-class Grid:
-    def __init__(self, grid_cols: int, grid_rows: int, window: pyglet.window.Window) -> None:
-        self.grid_cols = grid_cols
-        self.grid_rows = grid_rows
-        self._grid = numpy.empty((grid_rows, grid_cols), dtype=Cell)
+        self.view_tiles_x, self.view_tiles_y = 0, 0
+        self.view_grid = None
 
         LOGGER.debug("Initializing grid")
-        for row in range(grid_rows):
-            for col in range(grid_cols):
-                sprite = pyglet.sprite.Sprite(
-                    IMG_FONT[6, 11], batch=window.main_batch, group=window.grp_background)
-                self._grid[row][col] = Cell(
-                    x=0, y=0, grid_x=col, grid_y=row, sprite=sprite, grid=self._grid)
+        t0 = time.time()
+        for row, row_arr in enumerate(self.level_grid):
+            for col, tile in enumerate(row_arr):
+                #XXX:creating sprite for every tile pre-emptiviely is a waste of resources
+                sprite = pyglet.sprite.Sprite(IMG_WALL, batch=None, group=window.grp_background)
+                row_arr[col] = Tile(grid_x=col, grid_y=row, map_grid=self.level_grid, sprite=sprite)
 
-        LOGGER.debug("Grid initialized")
+        LOGGER.info("Init took %.4f", time.time() - t0)
 
         player_sprite = pyglet.sprite.Sprite(
-            IMG_FONT[6, 0], batch=window.main_batch, group=window.grp_foreground)
-        player_sprite.scale = window.width / (self.grid_cols * IMG_FONT_WIDTH)
-        self.player = Entity(player_sprite)
-        self._grid[self.grid_rows//2][self.grid_cols//2].add_entity(self.player)
+            IMG_PLAYER, batch=window.main_batch, group=window.grp_foreground)
+        self.player = Entity("player", player_sprite)
+        self.level_grid[self.level_grid_rows // 2, self.level_grid_cols // 2].add_entity(self.player)
+
+        self.active_entities: List[Entity] = []
         pyglet.clock.schedule_interval(self.update, UPDATE_INTERVAL)
 
-        self.active_entities = [self.player]
+
+    def update(self, delta: float) -> None:
+        moved = self.player.update()
+        if moved and self.player.occupied_cell:
+            target_x = self.player.occupied_cell.grid_x
+            target_y = self.player.occupied_cell.grid_y
+            self.move_view_to(target_x, target_y, moved.value)
+        for entity in self.active_entities:
+            entity.update()
 
 
     def on_key_press(self, symbol: int, modifiers: int) -> None:
@@ -208,27 +251,110 @@ class Grid:
             self.player.planned_move = ()
 
 
-    def update(self, delta: float) -> None:
-        for entity in self.active_entities:
-            entity.update()
-
-
     def resize(self, window: pyglet.window.Window) -> None:
-        sprite_scale = window.width / (self.grid_cols * IMG_FONT_WIDTH)
-        sprite_size = IMG_FONT_WIDTH * sprite_scale
-        LOGGER.debug("Resizing grid")
-        for row in range(self.grid_rows):
-            for col in range(self.grid_cols):
-                pos_x = sprite_size * col + 1
-                pos_y = sprite_size * row + 1
-                self._grid[row][col].move_cell(pos_x, pos_y, sprite_scale)
+        t0 = time.time()
+        tiles_horizontal = ceil(window.width / self.tile_width)
+        if tiles_horizontal % 2 == 0:
+            tiles_horizontal += 1
+        tiles_vertical = ceil(window.height / self.tile_height)
+        if tiles_vertical % 2 == 0:
+            tiles_vertical += 1
 
-        LOGGER.debug("Done resizing")
+        self.view_tiles_x = tiles_horizontal
+        self.view_tiles_y = tiles_vertical
+        LOGGER.debug("Visible grid resized to (%dx%d)", tiles_horizontal, tiles_vertical)
+        target = self.player.occupied_cell
+        self.move_view_to(target.grid_x, target.grid_y, (0, 0))
+        LOGGER.info("Resizing took %.3f", time.time() - t0)
 
 
-class GameWindow(pyglet.window.Window): #pylint: disable=abstract-method
+    def move_view_to(self, grid_x: int, grid_y: int, direction: Tuple[int, int]) -> None:
+        center_tile = self.level_grid[grid_y, grid_x]
+        left_offset = 0
+        bottom_offset = 0
+
+        #FIXME: there still are occasional glitches when resizing
+
+        min_col = center_tile.grid_x - self.view_tiles_x // 2
+        if min_col < 0:
+            left_offset = min_col * -1
+            min_col = 0
+
+        min_row = center_tile.grid_y - self.view_tiles_y // 2
+        if min_row < 0:
+            bottom_offset = min_row * -1
+            min_row = 0
+
+        #left_offset = 0
+        #bottom_offset = 0
+
+        row_constraint, col_constraint = self.level_grid.shape
+        max_col = min(col_constraint, center_tile.grid_x + ceil(self.view_tiles_x / 2))
+        max_row = min(row_constraint, center_tile.grid_y + ceil(self.view_tiles_y / 2))
+        new_view = self.level_grid[min_row:max_row+1, min_col:max_col+1]
+        LOGGER.debug("new view: %d:%d, %d:%d", min_row, max_row, min_col, max_col)
+        # ~ breakpoint()
+        # ~ LOGGER.debug("New view: %s", new_view)
+
+        #disable rendering of tiles moved out of view
+        t0 = time.time()
+        if not self.view_grid is None:
+            col_tiles_to_disable = ()
+            row_tiles_to_disable = ()
+            if direction[0] or direction[1]:
+                if direction[0]:
+                    if direction[0] > 0:
+                        col_tiles_to_disable = self.view_grid[:,0:direction[0]]
+                    elif direction[0] < 0:
+                        col_tiles_to_disable = self.view_grid[:,direction[0]-1:-1]
+
+                if direction[1]:
+                    if direction[1] > 0:
+                        row_tiles_to_disable = self.view_grid[0:direction[1]]
+                    elif direction[1] < 0:
+                        row_tiles_to_disable = self.view_grid[direction[1]-1:-1]
+            else:
+                # the view could have been shrunk as a result of resizing, check all tiles
+                #XXX: this is slow
+                row_tiles_to_disable = self.view_grid
+
+
+            for row_arr in row_tiles_to_disable:
+                for tile in row_arr:
+                    tile.sprite.batch = None
+                    #XXX:re-adding sprite to batch is a costly operation
+            for row_arr in col_tiles_to_disable:
+                for tile in row_arr:
+                    tile.sprite.batch = None
+                    #XXX:re-adding sprite to batch is a costly operation
+
+        LOGGER.info("Disabling old view took %.3f", time.time() - t0)
+        t1 = time.time()
+        # calculate the layout for current view
+        starting_pos_x = int(self.window.width - (self.view_tiles_x * self.tile_width))
+        starting_pos_y = int(self.window.height - (self.view_tiles_y * self.tile_height))
+        LOGGER.debug("Starting layout position: (%d,%d)", starting_pos_x, starting_pos_y)
+        t0 = time.time()
+        for y, row in enumerate(new_view):
+            for x, tile in enumerate(row):
+                pos_x = starting_pos_x + (self.tile_width * (x + left_offset))
+                pos_y = starting_pos_y + (self.tile_height * (y + bottom_offset))
+                tile.move_tile(pos_x, pos_y, self.window, self.sprite_scale)
+                tile.sprite.batch = self.window.main_batch
+
+        LOGGER.info("Enabling new view took %.3f", time.time() - t1)
+        self.view_grid = new_view
+
+
+
+class GameController:
+    ...
+
+
+
+class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
     def __init__(self) -> None:
-        super().__init__(800, 600, caption="roguelike", resizable=True)
+        super().__init__(960, 540, caption="roguelike", resizable=True)
         self.main_batch = pyglet.graphics.Batch()
         self.grp_background = pyglet.graphics.OrderedGroup(0)
         self.grp_foreground = pyglet.graphics.OrderedGroup(1)
@@ -238,8 +364,8 @@ class GameWindow(pyglet.window.Window): #pylint: disable=abstract-method
             text="Hello roguelike world",
             font_name="monogram",
             font_size=32,
-            x=self.width//2, y=self.height-100,
-            anchor_x="center", anchor_y="center",
+            x=self.width//2, y=self.height-10,
+            anchor_x="center", anchor_y="top",
             batch=self.main_batch, group=self.grp_interface
         )
 
@@ -248,12 +374,12 @@ class GameWindow(pyglet.window.Window): #pylint: disable=abstract-method
             font_name="monogram",
             font_size=24,
             color=(250, 100, 100, 255),
-            x=15, y=self.height-50,
-            anchor_x="left", anchor_y="center",
+            x=15, y=self.height-5,
+            anchor_x="left", anchor_y="top",
             batch=self.main_batch, group=self.grp_interface
         )
 
-        self.grid = Grid(40, 30, self)
+        self.grid = Map((80, 45), self)
         self.push_handlers(self.grid)
         pyglet.clock.schedule_interval(self.check_fps, 1)
 
@@ -263,31 +389,30 @@ class GameWindow(pyglet.window.Window): #pylint: disable=abstract-method
 
 
     def on_draw(self) -> None:
+        self.switch_to()
         self.clear()
         self.main_batch.draw()
 
 
     def on_resize(self, width: int, height: int) -> None:
-        optimal_height = (3 * self.width) // 4
-        if height != optimal_height:
-            pyglet.clock.schedule_once(self.correct_aspect, .4)
+        #optimal_height = (3 * self.width) // 4
+        #if height != optimal_height:
+        #    pyglet.clock.schedule_once(self.correct_aspect, .5)
             #FIXME: resizing stops when the mouse stops moving,
             # and not when the user releases the resizing handle
             # as long as the handle is held, the window cannot be
             # programmatically resized
-            return
+            #return
             # on_resize will be called again as result of correct_apsect()
 
+        pyglet.clock.unschedule(self.delayed_resize)
+        pyglet.clock.schedule_once(self.delayed_resize, .2, width, height)
+
+
+    def delayed_resize(self, _: Any, width: int, height: int) -> None:
         super().on_resize(width, height)
         LOGGER.debug("The window was resized to %dx%d", width, height)
         self.grid.resize(self)
-
-
-    def correct_aspect(self, _):
-        optimal_height = (3 * self.width) // 4
-        if self.height != optimal_height:
-            LOGGER.debug("correcting height")
-            self.set_size(self.width, optimal_height)
 
 
     def on_deactivate(self) -> None:
