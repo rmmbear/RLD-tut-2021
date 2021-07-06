@@ -119,8 +119,7 @@ class Tile:
     def sprite(self, sprite: pyglet.sprite.Sprite) -> None:
         """Ensure proper placement and anchoring."""
         if self.screen_x and self.screen_y:
-            sprite.x = self.screen_x
-            sprite.y = self.screen_y
+            sprite.update(x=self.screen_x, y=self.screen_y)
 
         sprite.anchor_y = 0
         sprite.anchor_x = 0
@@ -138,8 +137,7 @@ class Tile:
                      self.grid_x, self.grid_y, self.screen_x, self.screen_y)
 
         if entity.sprite and (self.screen_x and self.screen_y):
-            entity.sprite.x = self.screen_x
-            entity.sprite.y = self.screen_y
+            entity.sprite.update(x=self.screen_x, y=self.screen_y)
 
         entity.occupied_cell = self
         self.entity = entity
@@ -175,24 +173,15 @@ class Tile:
         return True
 
 
-    def move_tile(self, pos_x: int, pos_y: int, window: pyglet.window.Window,
-                  scale: Optional[float] = None) -> None:
+    def move_tile(self, pos_x: int, pos_y: int, window: pyglet.window.Window, scale: int) -> None:
         self.screen_x = pos_x
         self.screen_y = pos_y
 
-        if scale:
-            if self.sprite:
-                self.sprite.scale = scale
-            if self.entity:
-                self.entity.sprite.scale = scale
-
         if self.sprite:
-            self.sprite.x = pos_x
-            self.sprite.y = pos_y
+            self.sprite.update(x=pos_x, y=pos_y, scale=scale)
 
         if self.entity:
-            self.entity.sprite.x = pos_x
-            self.entity.sprite.y = pos_y
+            self.entity.sprite.update(x=pos_x, y=pos_y, scale=scale)
 
 
 
@@ -328,7 +317,7 @@ class Map:
                     tile.sprite.batch = None
                     #XXX:re-adding sprite to batch is a costly operation
 
-        LOGGER.info("Disabling old view took %.3f", time.time() - t0)
+        LOGGER.debug("Disabling old view took %.3f", time.time() - t0)
         t1 = time.time()
         # calculate the layout for current view
         starting_pos_x = int(self.window.width - (self.view_tiles_x * self.tile_width))
@@ -342,14 +331,13 @@ class Map:
                 tile.move_tile(pos_x, pos_y, self.window, self.sprite_scale)
                 tile.sprite.batch = self.window.main_batch
 
-        LOGGER.info("Enabling new view took %.3f", time.time() - t1)
+        LOGGER.debug("Enabling new view took %.3f", time.time() - t1)
         self.view_grid = new_view
 
 
 
 class GameController:
     ...
-
 
 
 class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
@@ -378,35 +366,41 @@ class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
             anchor_x="left", anchor_y="top",
             batch=self.main_batch, group=self.grp_interface
         )
+        self.draw_time_label = pyglet.text.Label(
+            text="00.00",
+            font_name="monogram",
+            font_size=24,
+            color=(250, 100, 100, 255),
+            x=15, y=self.fps_label.y-24-5,
+            anchor_x="left", anchor_y="top",
+            batch=self.main_batch, group=self.grp_interface
+        )
 
         self.grid = Map((80, 45), self)
         self.push_handlers(self.grid)
-        pyglet.clock.schedule_interval(self.check_fps, 1)
+        pyglet.clock.schedule_interval(self.check_fps, .5)
+        self.frame_times = []
 
 
     def check_fps(self, delta: int) -> None:
-        self.fps_label.text = f"{float(pyglet.clock.get_fps()):2.3}"
+        self.fps_label.text = f"{float(pyglet.clock.get_fps()):2.4} updates/s"
+        self.draw_time_label.text = f"{float(sum(self.frame_times) / len(self.frame_times)) * 10000:.4} ms/draw"
+        self.frame_times = []
 
 
     def on_draw(self) -> None:
-        self.switch_to()
+        t0 = time.time()
         self.clear()
         self.main_batch.draw()
+        self.frame_times.append(time.time() - t0)
 
 
     def on_resize(self, width: int, height: int) -> None:
-        #optimal_height = (3 * self.width) // 4
-        #if height != optimal_height:
-        #    pyglet.clock.schedule_once(self.correct_aspect, .5)
-            #FIXME: resizing stops when the mouse stops moving,
-            # and not when the user releases the resizing handle
-            # as long as the handle is held, the window cannot be
-            # programmatically resized
-            #return
-            # on_resize will be called again as result of correct_apsect()
-
+        # delay resizing operations
+        # the idea here is to perform the rather expensize resizing operations
+        # only after user has decided on the final size of the window
         pyglet.clock.unschedule(self.delayed_resize)
-        pyglet.clock.schedule_once(self.delayed_resize, .2, width, height)
+        pyglet.clock.schedule_once(self.delayed_resize, .1, width, height)
 
 
     def delayed_resize(self, _: Any, width: int, height: int) -> None:
