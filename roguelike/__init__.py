@@ -1,6 +1,7 @@
 import os
 import enum
 import time
+import random
 import logging
 import dataclasses as dc
 from math import ceil
@@ -33,6 +34,7 @@ UPDATE_INTERVAL = 1/60
 
 IMG_WALL = IMG_FONT[5, 10]
 IMG_PLAYER = IMG_FONT[6, 0]
+
 
 #TODO: Delay creation of tile sprites
 #TODO: use a sprite pool, assign sprites to tiles as needed
@@ -67,6 +69,13 @@ KEY_TO_DIR = {
     key.NUM_2: Directions.DOWN,
     key.NUM_1: Directions.LEFT_DOWN,
 }
+
+def random_rgb() -> Tuple[int, int, int]:
+    return (
+        random.randrange(0,256),
+        random.randrange(0,256),
+        random.randrange(0,256)
+    )
 
 
 class Entity:
@@ -117,14 +126,12 @@ class Tile:
     @sprite.setter
     def sprite(self, sprite: pyglet.sprite.Sprite) -> None:
         """Ensure proper placement and anchoring."""
-        sprite.update(x=self.abs_x, y=self.abs_y)
-
-        sprite.color = (
-            int(self.grid_x / self.map_grid.shape[1] * 255),
-            int(self.grid_y / self.map_grid.shape[0] * 255),
-            200,
-
-        )
+        if sprite:
+            sprite.update(x=self.abs_x, y=self.abs_y)
+            sprite.color = (
+                int(self.grid_x / self.map_grid.shape[1] * 255),
+                int(self.grid_y / self.map_grid.shape[0] * 255),
+                255)
         self._sprite = sprite
 
 
@@ -169,21 +176,14 @@ class Tile:
         return True
 
 
-    def move_tile(self, pos_x: int, pos_y: int, window: pyglet.window.Window, scale: int) -> None:
-        self.abs_x = pos_x
-        self.abs_y = pos_y
-
-        if self.sprite:
-            self.sprite.update(x=pos_x, y=pos_y, scale=scale)
-
-        if self.entity:
-            self.entity.sprite.update(x=pos_x, y=pos_y, scale=scale)
-
-
 
 class Map:
     def __init__(self, size: Tuple[int, int], window: pyglet.window.Window) -> None:
         self.window = window
+        self.batch = pyglet.graphics.Batch()
+        self.grp_tiles = pyglet.graphics.OrderedGroup(1, self.window.grp_foreground)
+        self.grp_entities = pyglet.graphics.OrderedGroup(2, self.window.grp_foreground)
+
         self.sprite_scale = IMG_FONT_SCALE
         self.tile_width = IMG_FONT_WIDTH * IMG_FONT_SCALE
         self.tile_height = IMG_FONT_HEIGHT * IMG_FONT_SCALE
@@ -191,18 +191,14 @@ class Map:
         self.level_grid_cols, self.level_grid_rows = size
         self.level_grid = numpy.empty((self.level_grid_rows, self.level_grid_cols), dtype=Tile)
 
-        self.view_target = (window.width // 2, window.height // 2)
-        self.view_offset = (0, 0)
-
         LOGGER.debug("Initializing grid")
         t0 = time.time()
         for row, row_arr in enumerate(self.level_grid):
-            for col, tile in enumerate(row_arr):
+            for col, _ in enumerate(row_arr):
                 pos_x = self.tile_width * col + 5
                 pos_y = self.tile_width * row + 5
                 #XXX:creating sprite for every tile pre-emptively is a waste of resources
-                sprite = pyglet.sprite.Sprite(IMG_WALL, batch=window.batch,
-                                              group=window.grp_background)
+                sprite = pyglet.sprite.Sprite(IMG_WALL, batch=self.batch, group=self.grp_tiles)
                 sprite.scale=self.sprite_scale
                 row_arr[col] = Tile(abs_x=pos_x, abs_y=pos_y, grid_x=col, grid_y=row,
                                     map_grid=self.level_grid, sprite=sprite)
@@ -210,12 +206,24 @@ class Map:
         LOGGER.info("Init took %.4f", time.time() - t0)
 
         player_sprite = pyglet.sprite.Sprite(
-            IMG_PLAYER, batch=window.batch, group=window.grp_foreground)
+            IMG_PLAYER, batch=self.batch, group=self.grp_entities)
         player_sprite.scale = self.sprite_scale
         self.player = Entity("player", player_sprite)
         self.level_grid[13, 24].add_entity(self.player)
         self.move_view(self.player.occupied_tile)
         self.active_entities: List[Entity] = []
+
+        for i in range(10):
+            rand_x = random.randrange(49)
+            rand_y = random.randrange(28)
+            sprite = pyglet.sprite.Sprite(
+                IMG_PLAYER, batch=self.batch, group=self.grp_entities)
+            sprite.scale = self.sprite_scale
+            sprite.color = random_rgb()
+            ent = Entity(f"npc{i}", sprite)
+            self.level_grid[rand_y][rand_x].add_entity(ent)
+            self.active_entities.append(ent)
+
         pyglet.clock.schedule_interval(self.update, UPDATE_INTERVAL)
 
 
@@ -242,29 +250,12 @@ class Map:
             self.player.planned_move = ()
 
 
-    def resize(self, window: pyglet.window.Window) -> None:
-        # reset the previous offset
-        pyglet.gl.glTranslatef(-self.view_offset[0], -self.view_offset[1], 0)
-        # calculate new offset
-        screen_diff_x = (self.window.init_width - self.window.width) // 2
-        screen_diff_y = (self.window.init_height - self.window.height) // 2
-        # move half a tile - sprite is anchored at 0,0
-        new_offset_x = -screen_diff_x - self.tile_width // 2
-        new_offset_y = -screen_diff_y - self.tile_height // 2
-        # apply new offset
-        pyglet.gl.glTranslatef(new_offset_x, new_offset_y, 0)
-        self.view_offset = new_offset_x, new_offset_y
-        LOGGER.debug("View offset %s", self.view_offset)
-
-
     def move_view(self, target: Tile) -> None:
-        translate_x = self.view_target[0] - target.abs_x
-        translate_y = self.view_target[1] - target.abs_y
-        self.view_target = target.abs_x, target.abs_y
-
-        #FIXME: this is obviously not the right way to do it
-        # but it's a start
-        pyglet.gl.glTranslatef(translate_x, translate_y, 0)
+        """Move the 'view' (center of the screen) to target tile."""
+        target_x = target.abs_x - (self.window.width // 2) + (self.tile_width // 2)
+        target_y = target.abs_y - (self.window.height // 2) + (self.tile_height // 2)
+        # view_target is a tuple of offsets from grid origin point
+        self.window.view_target = target_x, target_y
 
 
 
@@ -282,6 +273,8 @@ class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
         self.grp_background = pyglet.graphics.OrderedGroup(0)
         self.grp_foreground = pyglet.graphics.OrderedGroup(1)
         self.grp_interface = pyglet.graphics.OrderedGroup(2)
+        self.view_target = self.width // 2, self.height // 2
+        self.view_offset = (0,0)
 
         self.label = pyglet.text.Label(
             text="Hello roguelike world",
@@ -317,7 +310,6 @@ class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
         self.frame_times: List[float] = []
 
 
-
     def check_fps(self, delta: int) -> None:
         self.fps_label.text = f"{float(pyglet.clock.get_fps()):0>4.2f} updates/s"
         self.draw_time_label.text = f"{float(sum(self.frame_times) / len(self.frame_times)) * 1000:0>6.2f} ms/draw"
@@ -327,14 +319,20 @@ class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
     def on_draw(self) -> None:
         t0 = time.time()
         self.clear()
+        pyglet.gl.glLoadIdentity() # resets any applied translation matrices
+        pyglet.gl.glPushMatrix() # stash the current matrix so translation doesn't affect it
+        pyglet.gl.glTranslatef(-self.view_target[0], -self.view_target[1], 0)
+        self.grid.batch.draw()
+        pyglet.gl.glPopMatrix() # retrieve to stashed matrix
         self.batch.draw()
+
         self.frame_times.append(time.time() - t0)
 
 
     def on_resize(self, width: int, height: int) -> None:
         super().on_resize(width, height)
         LOGGER.debug("The window was resized to %dx%d", width, height)
-        self.grid.resize(self)
+        self.grid.move_view(self.grid.player.occupied_tile)
 
 
     def on_deactivate(self) -> None:
