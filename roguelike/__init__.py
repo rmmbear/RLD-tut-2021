@@ -5,7 +5,7 @@ import random
 import logging
 import dataclasses as dc
 from math import ceil
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 import numpy
 import pyglet
@@ -100,6 +100,12 @@ class Entity:
 
 
 
+class Player(Entity):
+    def __init__(self) -> None:
+        super().__init__("player", pyglet.sprite.Sprite(IMG_PLAYER))
+
+
+
 @dc.dataclass(init=True, eq=False)
 class Tile:
     grid_x: int
@@ -178,11 +184,11 @@ class Tile:
 
 
 class Map:
-    def __init__(self, size: Tuple[int, int], window: pyglet.window.Window) -> None:
+    def __init__(self, size: Tuple[int, int], player: Entity, window: pyglet.window.Window) -> None:
         self.window = window
         self.batch = pyglet.graphics.Batch()
-        self.grp_tiles = pyglet.graphics.OrderedGroup(1, self.window.grp_foreground)
-        self.grp_entities = pyglet.graphics.OrderedGroup(2, self.window.grp_foreground)
+        self.grp_tiles = pyglet.graphics.OrderedGroup(1, self.window.grp_fore)
+        self.grp_entities = pyglet.graphics.OrderedGroup(2, self.window.grp_fore)
 
         self.sprite_scale = IMG_FONT_SCALE
         self.tile_width = IMG_FONT_WIDTH * IMG_FONT_SCALE
@@ -190,7 +196,19 @@ class Map:
 
         self.level_grid_cols, self.level_grid_rows = size
         self.level_grid = numpy.empty((self.level_grid_rows, self.level_grid_cols), dtype=Tile)
+        self.create_grid()
 
+        player.sprite.batch = self.batch
+        player.sprite.group = self.grp_entities
+        player.sprite.scale = self.sprite_scale
+        self.player = player
+        self.place_player()
+
+        self.entities: List[Entity] = []
+        self.create_entities()
+
+
+    def create_grid(self) -> None:
         LOGGER.debug("Initializing grid")
         t0 = time.time()
         for row, row_arr in enumerate(self.level_grid):
@@ -205,14 +223,8 @@ class Map:
 
         LOGGER.info("Init took %.4f", time.time() - t0)
 
-        player_sprite = pyglet.sprite.Sprite(
-            IMG_PLAYER, batch=self.batch, group=self.grp_entities)
-        player_sprite.scale = self.sprite_scale
-        self.player = Entity("player", player_sprite)
-        self.level_grid[13, 24].add_entity(self.player)
-        self.move_view(self.player.occupied_tile)
-        self.active_entities: List[Entity] = []
 
+    def create_entities(self) -> None:
         for i in range(10):
             rand_x = random.randrange(49)
             rand_y = random.randrange(28)
@@ -222,8 +234,96 @@ class Map:
             sprite.color = random_rgb()
             ent = Entity(f"npc{i}", sprite)
             self.level_grid[rand_y][rand_x].add_entity(ent)
-            self.active_entities.append(ent)
+            self.entities.append(ent)
 
+
+    def place_player(self) -> None:
+        self.level_grid[13, 24].add_entity(self.player)
+
+
+
+class GUI:
+    #TODO: main menu
+    #TODO: in-game sidebar
+    #TODO: in-game overlay menus
+    def __init__(self, window: pyglet.window.Window) -> None:
+        self.window = window
+        self.batch = pyglet.graphics.Batch()
+        self.label = pyglet.text.Label(
+            text="Hello roguelike world",
+            font_name="monogram",
+            font_size=32,
+            x=self.window.width//2 + 10, y=self.window.height-10,
+            anchor_x="center", anchor_y="top",
+            batch=self.batch, group=self.window.grp_ui
+        )
+
+        if __debug__:
+            # emable fps and draw time measurements
+            # this code will only fire when the module is ran without optimization flags
+            self.fps_label = pyglet.text.Label(
+                text="00.00",
+                font_name="monogram",
+                font_size=24,
+                color=(250, 100, 100, 255),
+                x=25, y=self.window.height-5,
+                anchor_x="left", anchor_y="top",
+                batch=self.batch, group=self.window.grp_ui
+            )
+            self.draw_time_label = pyglet.text.Label(
+                text="00.00",
+                font_name="monogram",
+                font_size=24,
+                color=(250, 100, 100, 255),
+                x=25, y=self.fps_label.y-24-5,
+                anchor_x="left", anchor_y="top",
+                batch=self.batch, group=self.window.grp_ui
+            )
+
+            self.frame_times: List[float] = []
+            def measure_draw_time(f: Callable) -> Callable:
+                def inner(*args: Any, **kwargs: Any) -> Any:
+                    t0 = time.time()
+                    ret = f(*args, **kwargs)
+                    self.frame_times.append(time.time() - t0)
+                    return ret
+
+                return inner
+
+
+            def check_fps(_: float) -> None:
+                self.fps_label.text = f"{float(pyglet.clock.get_fps()):0>4.2f} updates/s"
+                if self.frame_times:
+                    draw_time_ms = float(sum(self.frame_times) / len(self.frame_times)) * 1000
+                    self.draw_time_label.text = f"{draw_time_ms:0>6.2f} ms/draw"
+                    self.frame_times = []
+
+
+            self.check_fps = check_fps
+            pyglet.clock.schedule_interval(self.check_fps, .5)
+            self.window.on_draw = measure_draw_time(self.window.on_draw)
+
+
+    def resize(self) -> None:
+        raise NotImplementedError()
+
+
+
+class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
+    """The main application class.
+    Holds app state, handles input events, drawing, and update loop.
+    """
+    def __init__(self, *args: int, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.grp_back = pyglet.graphics.OrderedGroup(0)
+        self.grp_fore = pyglet.graphics.OrderedGroup(1)
+        self.grp_ui = pyglet.graphics.OrderedGroup(2)
+        self.view_target = self.width // 2, self.height // 2
+
+        self.player = Player()
+        self.gui = GUI(self)
+        self.grid = Map((100, 100), self.player, self)
+        self.entities = self.grid.entities
         pyglet.clock.schedule_interval(self.update, UPDATE_INTERVAL)
 
 
@@ -233,8 +333,32 @@ class Map:
             if moved and self.player.occupied_tile:
                 self.move_view(self.player.occupied_tile)
 
-        for entity in self.active_entities:
+        for entity in self.entities:
             entity.update()
+
+
+    def on_draw(self) -> None:
+        self.clear()
+        pyglet.gl.glLoadIdentity() # resets any applied translation matrices
+        pyglet.gl.glPushMatrix() # stash the current matrix so next translation doesn't affect it
+        pyglet.gl.glTranslatef(-self.view_target[0], -self.view_target[1], 0)
+        self.grid.batch.draw()
+        pyglet.gl.glPopMatrix() # retrieve to stashed matrix
+        self.gui.batch.draw()
+
+
+    def move_view(self, target: Tile) -> None:
+        """Move the 'view' (center of the screen) to target tile."""
+        target_x = target.abs_x - (self.width // 2) + (self.grid.tile_width // 2)
+        target_y = target.abs_y - (self.height // 2) + (self.grid.tile_height // 2)
+        # view_target is a tuple of offsets from grid origin point
+        self.view_target = target_x, target_y
+
+
+    def on_resize(self, width: int, height: int) -> None:
+        super().on_resize(width, height)
+        LOGGER.debug("The window was resized to %dx%d", width, height)
+        self.move_view(self.player.occupied_tile)
 
 
     def on_key_press(self, symbol: int, modifiers: int) -> None:
@@ -250,101 +374,16 @@ class Map:
             self.player.planned_move = ()
 
 
-    def move_view(self, target: Tile) -> None:
-        """Move the 'view' (center of the screen) to target tile."""
-        target_x = target.abs_x - (self.window.width // 2) + (self.tile_width // 2)
-        target_y = target.abs_y - (self.window.height // 2) + (self.tile_height // 2)
-        # view_target is a tuple of offsets from grid origin point
-        self.window.view_target = target_x, target_y
-
-
-
-class GameController:
-    ...
-
-
-
-class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
-    def __init__(self) -> None:
-        super().__init__(960, 540, caption="roguelike", resizable=True)
-        self.init_width = self.width
-        self.init_height = self.height
-        self.batch = pyglet.graphics.Batch()
-        self.grp_background = pyglet.graphics.OrderedGroup(0)
-        self.grp_foreground = pyglet.graphics.OrderedGroup(1)
-        self.grp_interface = pyglet.graphics.OrderedGroup(2)
-        self.view_target = self.width // 2, self.height // 2
-        self.view_offset = (0,0)
-
-        self.label = pyglet.text.Label(
-            text="Hello roguelike world",
-            font_name="monogram",
-            font_size=32,
-            x=self.width//2 + 10, y=self.height-10,
-            anchor_x="center", anchor_y="top",
-            batch=self.batch, group=self.grp_interface
-        )
-
-        self.fps_label = pyglet.text.Label(
-            text="00.00",
-            font_name="monogram",
-            font_size=24,
-            color=(250, 100, 100, 255),
-            x=25, y=self.height-5,
-            anchor_x="left", anchor_y="top",
-            batch=self.batch, group=self.grp_interface
-        )
-        self.draw_time_label = pyglet.text.Label(
-            text="00.00",
-            font_name="monogram",
-            font_size=24,
-            color=(250, 100, 100, 255),
-            x=25, y=self.fps_label.y-24-5,
-            anchor_x="left", anchor_y="top",
-            batch=self.batch, group=self.grp_interface
-        )
-
-        self.grid = Map((100, 100), self)
-        self.push_handlers(self.grid)
-        pyglet.clock.schedule_interval(self.check_fps, .5)
-        self.frame_times: List[float] = []
-
-
-    def check_fps(self, delta: int) -> None:
-        self.fps_label.text = f"{float(pyglet.clock.get_fps()):0>4.2f} updates/s"
-        self.draw_time_label.text = f"{float(sum(self.frame_times) / len(self.frame_times)) * 1000:0>6.2f} ms/draw"
-        self.frame_times = []
-
-
-    def on_draw(self) -> None:
-        t0 = time.time()
-        self.clear()
-        pyglet.gl.glLoadIdentity() # resets any applied translation matrices
-        pyglet.gl.glPushMatrix() # stash the current matrix so translation doesn't affect it
-        pyglet.gl.glTranslatef(-self.view_target[0], -self.view_target[1], 0)
-        self.grid.batch.draw()
-        pyglet.gl.glPopMatrix() # retrieve to stashed matrix
-        self.batch.draw()
-
-        self.frame_times.append(time.time() - t0)
-
-
-    def on_resize(self, width: int, height: int) -> None:
-        super().on_resize(width, height)
-        LOGGER.debug("The window was resized to %dx%d", width, height)
-        self.grid.move_view(self.grid.player.occupied_tile)
-
-
     def on_deactivate(self) -> None:
-        pyglet.clock.unschedule(self.grid.update)
+        pyglet.clock.unschedule(self.update)
 
 
     def on_activate(self) -> None:
-        pyglet.clock.schedule_interval(self.grid.update, UPDATE_INTERVAL)
+        pyglet.clock.schedule_interval(self.update, UPDATE_INTERVAL)
 
 
 
 def main() -> None:
     LOGGER.debug("Starting main()")
-    window = GameWindow()
+    window = GameWindow(960, 540, caption="roguelike", resizable=True)
     pyglet.app.run()
