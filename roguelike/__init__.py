@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os
 import enum
 import time
@@ -79,16 +80,60 @@ def random_rgb() -> Tuple[int, int, int]:
     )
 
 
+class Action:
+    def __call__(self, window: GameWindow, entity: Entity) -> bool:
+        raise NotImplementedError()
+
+
+
+@dc.dataclass
+class ActionMove(Action):
+    dx: int
+    dy: int
+
+    def __call__(self, window: GameWindow, entity: Entity) -> bool:
+        assert entity.occupied_tile
+        target_col, target_row = entity.occupied_tile
+        target_col += self.dx
+        target_row += self.dy
+
+        if window.grid.can_move_to(entity, target_col, target_row):
+            window.grid.level_grid["entity"][entity.occupied_tile[::-1]] = 0
+            window.grid.place_entity(entity, target_col, target_row)
+            window.move_view(entity.occupied_tile)
+            return True
+        else:
+            LOGGER.debug("Cannot move entity '%s' to (%d,%d)", entity.name, target_col, target_row)
+            return False
+
+
+
+class ActionEsc(Action):
+    def __call__(self, window: GameWindow, entity: Entity) -> bool:
+        window.close()
+        return True
+        # ~ # pop elements from ui stack and close them until the stack is empty
+        # ~ if window.ui_stack:
+            # ~ ui_element = window.ui_stack.pop()
+            # ~ ui_element.close()
+        # ~ else:
+            # ~ # when ui stack is empty (player does not have menus open, interacts
+            # ~ # with the game directly) display an instance of escape menu
+            # ~ # (options for leaving to menu, quitting, settings menu)
+            # ~ window.gui.something
+
+
+
 class Entity:
     def __init__(self, name: str, sprite: pyglet.sprite.Sprite):
         self.name = name
         self.sprite = sprite
         self.occupied_tile: Union[Tuple[int, int], Tuple[()]] = ()
-        self.planned_move: Union[Tuple[Directions, int], Tuple[()]] = ()
-        #indices: 0 = Directions.DIRECTION, 1 = key symbol
+        self.action: Optional[Action] = None
 
 
     def update(self) -> None:
+
         return
 
 
@@ -96,6 +141,7 @@ class Entity:
 class Player(Entity):
     def __init__(self) -> None:
         super().__init__("player", pyglet.sprite.Sprite(IMG_PLAYER))
+        self.movement_repeat_key: Optional[int] = None
 
 
 
@@ -107,7 +153,7 @@ class TileSprite:
     # ~ image:
     sprite: Optional[pyglet.sprite.Sprite] = None
     color_norm: Tuple[int,int,int] = (255, 255, 255) # color of the sprite when it is visible
-    color_dark: Tuple[int,int,int] = (128, 128, 128)    # uncovered but not visible
+    color_dark: Tuple[int,int,int] = (128, 128, 128) # uncovered but not visible
 
 
     def __repr__(self) -> str:
@@ -138,7 +184,7 @@ class TileSprite:
         # sprite pool will decide whether to return an existing sprite or make new one
 
 
-    def deactivate(slef) -> None:
+    def deactivate(self) -> None:
         raise NotImplementedError()
         # remove the sprite from this object
         # return the sprite to sprite pool
@@ -319,6 +365,7 @@ class GUI:
         raise NotImplementedError()
 
 
+
 class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
     """The main application class.
     Holds app state, handles input events, drawing, and update loop.
@@ -333,27 +380,24 @@ class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
         self.player = Player()
         self.gui = GUI(self)
         self.grid = Map((100, 100), self.player, self)
+
+        self.key_handler = pyglet.window.key.KeyStateHandler()
+
         self.entities = self.grid.entities
         pyglet.clock.schedule_interval(self.update, UPDATE_INTERVAL)
 
 
     def update(self, delta: float) -> None:
-        if self.player.occupied_tile and self.player.planned_move:
-            target_col, target_row = self.player.occupied_tile
-            dx, dy = self.player.planned_move[0].value
-            target_col += dx
-            target_row += dy
+        if not self.player.action:
+            return
 
-            if self.grid.can_move_to(self.player, target_col, target_row):
-                self.grid.level_grid["entity"][self.player.occupied_tile[::-1]] = 0
-                self.grid.place_entity(self.player, target_col, target_row)
-                self.move_view(self.player.occupied_tile)
-            else:
-                LOGGER.debug("Cannot move player to (%d,%d)", target_col, target_row)
-
+        action_successful = self.player.action(self, self.player)
+        if not action_successful:
+            return
 
         for entity in self.entities:
-            entity.update()
+            if entity.action:
+                entity.action(self, entity)
 
 
     def on_draw(self) -> None:
@@ -380,6 +424,7 @@ class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
     def on_resize(self, width: int, height: int) -> None:
         super().on_resize(width, height)
         LOGGER.debug("The window was resized to %dx%d", width, height)
+        assert self.player.occupied_tile, "Player position not set!"
         self.move_view(self.player.occupied_tile)
 
 
@@ -387,13 +432,15 @@ class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
         LOGGER.debug("Key pressed %d", symbol)
         move = KEY_TO_DIR.get(symbol)
         if move:
-            self.player.planned_move = (move, symbol)
+            self.player.action = ActionMove(*move.value)
+            self.player.movement_repeat_key = symbol
 
 
     def on_key_release(self, symbol: int, modifiers: int) -> None:
         LOGGER.debug("Key released %d", symbol)
-        if self.player.planned_move and self.player.planned_move[1] == symbol:
-            self.player.planned_move = ()
+        if isinstance(self.player.action, ActionMove) and \
+           self.player.movement_repeat_key == symbol:
+            self.player.action = None
 
 
     def on_deactivate(self) -> None:
