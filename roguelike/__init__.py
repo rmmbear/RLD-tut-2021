@@ -7,7 +7,7 @@ import dataclasses as dc
 from math import ceil
 from typing import Any, Callable, List, Optional, Tuple, Union
 
-import numpy
+import numpy as np
 import pyglet
 from pyglet.window import key
 
@@ -32,9 +32,9 @@ IMG_FONT_WIDTH = 10
 IMG_FONT_HEIGHT = 10
 UPDATE_INTERVAL = 1/60
 
-IMG_WALL = IMG_FONT[5, 10]
+IMG_WALL = IMG_FONT[6, 11]
+IMG_FLOOR = IMG_FONT[7, 12]
 IMG_PLAYER = IMG_FONT[6, 0]
-
 
 #TODO: Delay creation of tile sprites
 #TODO: use a sprite pool, assign sprites to tiles as needed
@@ -70,11 +70,12 @@ KEY_TO_DIR = {
     key.NUM_1: Directions.LEFT_DOWN,
 }
 
+
 def random_rgb() -> Tuple[int, int, int]:
     return (
         random.randrange(0,256),
         random.randrange(0,256),
-        random.randrange(0,256)
+        random.randrange(0,256),
     )
 
 
@@ -82,21 +83,13 @@ class Entity:
     def __init__(self, name: str, sprite: pyglet.sprite.Sprite):
         self.name = name
         self.sprite = sprite
-        self.occupied_tile: Optional[Tile] = None
-        self.planned_move: Union[Tuple[Directions, int], Tuple] = ()
+        self.occupied_tile: Union[Tuple[int, int], Tuple[()]] = ()
+        self.planned_move: Union[Tuple[Directions, int], Tuple[()]] = ()
         #indices: 0 = Directions.DIRECTION, 1 = key symbol
 
 
-    def update(self) -> Optional[Directions]:
-        if self.planned_move and self.occupied_tile:
-            direction = self.planned_move[0]
-            moved = self.occupied_tile.move_entity(direction)
-            if not moved:
-                self.planned_move = ()
-            else:
-                return direction
-
-        return None
+    def update(self) -> None:
+        return
 
 
 
@@ -107,18 +100,18 @@ class Player(Entity):
 
 
 @dc.dataclass(init=True, eq=False)
-class Tile:
-    grid_x: int
-    grid_y: int
-    abs_x: int
-    abs_y: int
-    map_grid: numpy.ndarray
+class TileSprite:
+    x: int
+    y: int
+    scale: Union[float, int] = 1
+    # ~ image:
     sprite: Optional[pyglet.sprite.Sprite] = None
-    entity: Optional[Entity] = None
+    color_norm: Tuple[int,int,int] = (255, 255, 255) # color of the sprite when it is visible
+    color_dark: Tuple[int,int,int] = (128, 128, 128)    # uncovered but not visible
 
 
     def __repr__(self) -> str:
-        return f"<Tile [{self.grid_x}, {self.grid_y}] at xy: ({self.abs_x},{self.abs_y})>"
+        return f"<{self.__class__} [{self.x}, {self.y}]>"
 
 
     # https://github.com/python/mypy/issues/9779
@@ -131,56 +124,45 @@ class Tile:
 
     @sprite.setter
     def sprite(self, sprite: pyglet.sprite.Sprite) -> None:
-        """Ensure proper placement and anchoring."""
+        """Ensure proper placement when setting the sprite"""
         if sprite:
-            sprite.update(x=self.abs_x, y=self.abs_y)
-            sprite.color = (
-                int(self.grid_x / self.map_grid.shape[1] * 255),
-                int(self.grid_y / self.map_grid.shape[0] * 255),
-                255)
+            sprite.update(x=self.x, y=self.y)
+            sprite.color = self.color_norm
+
         self._sprite = sprite
 
 
-    def add_entity(self, entity: Entity) -> None:
-        LOGGER.debug("Adding entity on: grid(%s,%s) abs(%s,%s)",
-                     self.grid_x, self.grid_y, self.abs_x, self.abs_y)
-
-        if entity.sprite:
-            entity.sprite.update(x=self.abs_x, y=self.abs_y)
-
-        entity.occupied_tile = self
-        self.entity = entity
+    def activate(self) -> None:
+        raise NotImplementedError()
+        # fetch a matching sprite for our image from the sprite pool
+        # sprite pool will decide whether to return an existing sprite or make new one
 
 
-    def move_entity(self, direction: Directions) -> bool:
-        assert self.entity, "This tile has no entity on it!"
-        assert self.entity.planned_move[0] == direction
-
-        target_grid_x = self.grid_x + direction.value[0]
-        target_grid_y = self.grid_y + direction.value[1]
-
-        max_y, max_x = self.map_grid.shape
-        if not 0 <= target_grid_x < max_x or not 0 <= target_grid_y < max_y:
-            LOGGER.debug("%s at edge of grid", self.entity.name)
-            return False
-
-        target_tile = self.map_grid[target_grid_y, target_grid_x]
-        if target_tile.can_move_here(self.entity):
-            target_tile.add_entity(self.entity)
-            self.entity.occupied_tile = target_tile
-            self.entity = None
-            return True
-
-        LOGGER.debug("%s cannot move to %s", self.entity.name, self.__repr__())
-        return False
+    def deactivate(slef) -> None:
+        raise NotImplementedError()
+        # remove the sprite from this object
+        # return the sprite to sprite pool
 
 
-    def can_move_here(self, entity: Entity) -> bool:
-        if self.entity:
-            return False
+    def set_image(self, img: pyglet.image.AbstractImage) -> None:
+        raise NotImplementedError()
+        # deactivate the existing sprite (if any)
+        # set the new image
+        # if the previous sprite was activated, activate this one as well
 
-        return True
 
+DT_TILE_GRAPHIC = np.dtype([
+        ("sprite", pyglet.sprite.Sprite),
+        ("active", bool),   # whether this sprite has been initialized and can be displayed
+    ]
+)
+DT_TILE_NAV = np.dtype([
+        ("walkable", bool),          # True if this tile can be walked over
+        ("transparent", bool),       # True if this tile doesn't block FOV
+        ("sprite", DT_TILE_GRAPHIC), #
+        ("entity", Entity),          # entity occupying the tile
+    ]
+)
 
 
 class Map:
@@ -194,8 +176,7 @@ class Map:
         self.tile_width = IMG_FONT_WIDTH * IMG_FONT_SCALE
         self.tile_height = IMG_FONT_HEIGHT * IMG_FONT_SCALE
 
-        self.level_grid_cols, self.level_grid_rows = size
-        self.level_grid = numpy.empty((self.level_grid_rows, self.level_grid_cols), dtype=Tile)
+        self.level_grid = np.empty((size[1], size[0]), dtype=DT_TILE_NAV)
         self.create_grid()
 
         player.sprite.batch = self.batch
@@ -210,36 +191,66 @@ class Map:
 
     def create_grid(self) -> None:
         LOGGER.debug("Initializing grid")
+
         t0 = time.time()
-        for row, row_arr in enumerate(self.level_grid):
-            for col, _ in enumerate(row_arr):
+        row_count, col_count = self.level_grid.shape
+        for row in range(row_count):
+            for col in range(col_count):
                 pos_x = self.tile_width * col + 5
                 pos_y = self.tile_width * row + 5
-                #XXX:creating sprite for every tile pre-emptively is a waste of resources
-                sprite = pyglet.sprite.Sprite(IMG_WALL, batch=self.batch, group=self.grp_tiles)
-                sprite.scale=self.sprite_scale
-                row_arr[col] = Tile(abs_x=pos_x, abs_y=pos_y, grid_x=col, grid_y=row,
-                                    map_grid=self.level_grid, sprite=sprite)
+                sprite = pyglet.sprite.Sprite(
+                    IMG_FLOOR, x=pos_x, y=pos_y, batch=self.batch, group=self.grp_tiles)
+                tile = np.array(
+                    (True, True, (sprite, False), 0),
+                    dtype=DT_TILE_NAV
+                )
+                self.level_grid[row][col] = tile
 
         LOGGER.info("Init took %.4f", time.time() - t0)
 
 
     def create_entities(self) -> None:
         for i in range(10):
-            rand_x = random.randrange(49)
-            rand_y = random.randrange(28)
-            sprite = pyglet.sprite.Sprite(
-                IMG_PLAYER, batch=self.batch, group=self.grp_entities)
+            rand_x = random.randrange(self.level_grid.shape[0]-1)
+            rand_y = random.randrange(self.level_grid.shape[1]-1)
+            sprite = pyglet.sprite.Sprite(IMG_PLAYER, batch=self.batch, group=self.grp_entities)
             sprite.scale = self.sprite_scale
             sprite.color = random_rgb()
+            #sprite = Sprite(0, 0, self.sprite_scale, sprite=_sprite, color_norm=_sprite.color)
             ent = Entity(f"npc{i}", sprite)
-            self.level_grid[rand_y][rand_x].add_entity(ent)
+            self.place_entity(ent, rand_x, rand_y)
             self.entities.append(ent)
 
 
     def place_player(self) -> None:
-        self.level_grid[13, 24].add_entity(self.player)
+        self.place_entity(self.player, 24, 13)
 
+
+    def place_entity(self, entity: Entity, col: int, row: int) -> None:
+        abs_x = col * self.tile_width
+        abs_y = row * self.tile_height
+        LOGGER.debug("Adding entity on: grid(%s,%s) abs(%s,%s)",
+                     col, row, abs_x, abs_y)
+
+        if entity.sprite:
+            entity.sprite.update(x=abs_x, y=abs_y)
+
+        assert not self.level_grid["entity"][row][col]
+        self.level_grid["entity"][row][col] = entity
+        entity.occupied_tile = (col, row)
+
+
+    def can_move_to(self, entity: Entity, col: int, row: int) -> bool:
+        max_row, max_col = self.level_grid.shape
+        if col >= max_col or row >= max_row or col < 0 or row < 0:
+            LOGGER.debug("cannot move - out of bounds")
+            return False
+
+        if self.level_grid["entity"][row][col]:
+            LOGGER.debug("cannot move - tile occupied")
+            return False
+
+        return True
 
 
 class GUI:
@@ -308,7 +319,6 @@ class GUI:
         raise NotImplementedError()
 
 
-
 class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
     """The main application class.
     Holds app state, handles input events, drawing, and update loop.
@@ -328,10 +338,19 @@ class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
 
 
     def update(self, delta: float) -> None:
-        if self.player.occupied_tile:
-            moved = self.player.update()
-            if moved and self.player.occupied_tile:
+        if self.player.occupied_tile and self.player.planned_move:
+            target_col, target_row = self.player.occupied_tile
+            dx, dy = self.player.planned_move[0].value
+            target_col += dx
+            target_row += dy
+
+            if self.grid.can_move_to(self.player, target_col, target_row):
+                self.grid.level_grid["entity"][self.player.occupied_tile[::-1]] = 0
+                self.grid.place_entity(self.player, target_col, target_row)
                 self.move_view(self.player.occupied_tile)
+            else:
+                LOGGER.debug("Cannot move player to (%d,%d)", target_col, target_row)
+
 
         for entity in self.entities:
             entity.update()
@@ -347,10 +366,13 @@ class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
         self.gui.batch.draw()
 
 
-    def move_view(self, target: Tile) -> None:
+    def move_view(self, target: Tuple[int, int]) -> None:
         """Move the 'view' (center of the screen) to target tile."""
-        target_x = target.abs_x - (self.width // 2) + (self.grid.tile_width // 2)
-        target_y = target.abs_y - (self.height // 2) + (self.grid.tile_height // 2)
+        abs_x, abs_y = target
+        abs_x *= self.grid.tile_width
+        abs_y *= self.grid.tile_height
+        target_x = abs_x - (self.width // 2) + (self.grid.tile_width // 2)
+        target_y = abs_y - (self.height // 2) + (self.grid.tile_height // 2)
         # view_target is a tuple of offsets from grid origin point
         self.view_target = target_x, target_y
 
