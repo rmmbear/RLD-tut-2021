@@ -11,7 +11,7 @@ from typing import Any, Callable, List, Optional, Tuple, Union
 import pyglet
 from pyglet.window import key
 
-from .map import Map
+from .map import Map, Tileset
 from .entity import ActionMove, Player
 
 LOG_FORMAT = logging.Formatter("%(asctime)s [%(levelname)s]: %(message)s")#, "%Y-%m-%d %H:%M:%S")
@@ -29,15 +29,7 @@ pyglet.font.add_directory(DIR_RES)
 pyglet.resource.path = [DIR_RES]
 pyglet.resource.reindex()
 
-IMG_FONT_SCALE = 2
-IMG_FONT = pyglet.image.ImageGrid(pyglet.image.load("res/dejavu10x10_gs_tc.png"), 8, 32)
-IMG_FONT_WIDTH = 10
-IMG_FONT_HEIGHT = 10
 UPDATE_INTERVAL = 1/60
-
-IMG_WALL = IMG_FONT[6, 11]
-IMG_FLOOR = IMG_FONT[7, 12]
-IMG_PLAYER = IMG_FONT[6, 0]
 
 
 @enum.unique
@@ -68,20 +60,22 @@ KEY_TO_DIR = {
 }
 
 
+
 class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
     """The main application class.
     Holds app state, handles input events, drawing, and update loop.
     """
-    def __init__(self, *args: int, **kwargs: Any) -> None:
+    def __init__(self, *args: int, tileset: Tileset, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.grp_back = pyglet.graphics.OrderedGroup(0)
         self.grp_fore = pyglet.graphics.OrderedGroup(1)
         self.grp_ui = pyglet.graphics.OrderedGroup(2)
         self.view_target = self.width // 2, self.height // 2
 
-        self.player = Player(pyglet.sprite.Sprite(IMG_PLAYER))
+
+        self.player = Player(pyglet.sprite.Sprite(tileset.get_image(6, 0)))
         self.gui = GUI(self)
-        self.grid = Map((100, 100), self.player, self)
+        self.grid = Map((100, 100), self.player, self, tileset)
 
         self.key_handler = pyglet.window.key.KeyStateHandler()
 
@@ -115,10 +109,10 @@ class GameWindow(pyglet.window.Window): # pylint: disable=abstract-method
     def move_view(self, target: Tuple[int, int]) -> None:
         """Move the 'view' (center of the screen) to target tile."""
         abs_x, abs_y = target
-        abs_x *= self.grid.tile_width
-        abs_y *= self.grid.tile_height
-        target_x = abs_x - (self.width // 2) + (self.grid.tile_width // 2)
-        target_y = abs_y - (self.height // 2) + (self.grid.tile_height // 2)
+        abs_x *= self.grid.tileset.tile_width
+        abs_y *= self.grid.tileset.tile_height
+        target_x = abs_x - (self.width // 2) + (self.grid.tileset.tile_width // 2)
+        target_y = abs_y - (self.height // 2) + (self.grid.tileset.tile_height // 2)
         # view_target is a tuple of offsets from grid origin point
         self.view_target = target_x, target_y
 
@@ -224,5 +218,6 @@ class GUI:
 
 def main() -> None:
     LOGGER.debug("Starting main()")
-    window = GameWindow(960, 540, caption="roguelike", resizable=True)
+    tileset = Tileset("res/dejavu10x10_gs_tc.png", 8, 32, 2)
+    window = GameWindow(960, 540, tileset=tileset, caption="roguelike", resizable=True)
     pyglet.app.run()

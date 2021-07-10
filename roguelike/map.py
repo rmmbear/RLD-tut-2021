@@ -2,11 +2,13 @@ import time
 import random
 import logging
 from dataclasses import dataclass
-from typing import Tuple, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 import pyglet
 import numpy as np
 
 from.entity import Entity
+
+
 #TODO: Delay creation of tile sprites
 #TODO: use a sprite pool, assign sprites to tiles as needed
 #FIXME: fix coordinate issue resulting from indexing discrepency between pyglet and numpy
@@ -39,25 +41,48 @@ def random_rgb() -> Tuple[int, int, int]:
     )
 
 
+
+class Tileset:
+    def __init__(self, path: str, rows: int, cols: int, scale: int = 1) -> None:
+        self.path = path
+        self.rows = rows
+        self.cols = cols
+
+        self._image_grid = pyglet.image.ImageGrid(pyglet.image.load(path), rows, cols)
+        self._num_to_img: Dict[int, pyglet.image.AbstractImage] = {}
+
+        self.scale = scale
+        self.tile_width = self._image_grid.item_height * scale
+        self.tile_height = self._image_grid.item_height * scale
+
+
+    def get_image(self, row: int, col: int) -> pyglet.image.AbstractImage:
+        img = self._num_to_img.get(row * col)
+        if img:
+            return img
+
+        img = self._image_grid[row, col]
+        self._num_to_img[row * col] = img
+        return img
+
+
+
 class Map:
     def __init__(self, size: Tuple[int, int], player: Entity,
-                 window: pyglet.window.Window
+                 window: pyglet.window.Window, tileset: Tileset
                 ) -> None:
         self.window = window
+        self.tileset = tileset
         self.batch = pyglet.graphics.Batch()
         self.grp_tiles = pyglet.graphics.OrderedGroup(1, self.window.grp_fore)
         self.grp_entities = pyglet.graphics.OrderedGroup(2, self.window.grp_fore)
-
-        # ~ self.sprite_scale = IMG_FONT_SCALE
-        # ~ self.tile_width = IMG_FONT_WIDTH * IMG_FONT_SCALE
-        # ~ self.tile_height = IMG_FONT_HEIGHT * IMG_FONT_SCALE
 
         self.level_grid = np.empty((size[1], size[0]), dtype=DT_TILE_NAV)
         self.create_grid()
 
         player.sprite.batch = self.batch
         player.sprite.group = self.grp_entities
-        player.sprite.scale = self.sprite_scale
+        player.sprite.scale = self.tileset.scale
         self.player = player
         self.place_player()
 
@@ -72,10 +97,12 @@ class Map:
         row_count, col_count = self.level_grid.shape
         for row in range(row_count):
             for col in range(col_count):
-                pos_x = self.tile_width * col + 5
-                pos_y = self.tile_width * row + 5
+                pos_x = self.tileset.tile_width * col + 5
+                pos_y = self.tileset.tile_height * row + 5
                 sprite = pyglet.sprite.Sprite(
-                    IMG_FLOOR, x=pos_x, y=pos_y, batch=self.batch, group=self.grp_tiles)
+                    self.tileset.get_image(7, 12), x=pos_x, y=pos_y,
+                    batch=self.batch, group=self.grp_tiles
+                )
                 tile = np.array(
                     (True, True, (sprite, False), 0),
                     dtype=DT_TILE_NAV
@@ -89,8 +116,9 @@ class Map:
         for i in range(10):
             rand_x = random.randrange(self.level_grid.shape[0]-1)
             rand_y = random.randrange(self.level_grid.shape[1]-1)
-            sprite = pyglet.sprite.Sprite(IMG_PLAYER, batch=self.batch, group=self.grp_entities)
-            sprite.scale = self.sprite_scale
+            sprite = pyglet.sprite.Sprite(
+                self.tileset.get_image(6, 0), batch=self.batch, group=self.grp_entities)
+            sprite.scale = self.tileset.scale
             sprite.color = random_rgb()
             #sprite = Sprite(0, 0, self.sprite_scale, sprite=_sprite, color_norm=_sprite.color)
             ent = Entity(f"npc{i}", sprite)
@@ -103,8 +131,8 @@ class Map:
 
 
     def place_entity(self, entity: Entity, col: int, row: int) -> None:
-        abs_x = col * self.tile_width
-        abs_y = row * self.tile_height
+        abs_x = col * self.tileset.tile_width
+        abs_y = row * self.tileset.tile_height
         LOGGER.debug("Adding entity on: grid(%s,%s) abs(%s,%s)",
                      col, row, abs_x, abs_y)
 
